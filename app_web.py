@@ -1,51 +1,70 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
+import sqlite3
 import pandas as pd
 from datetime import datetime
- 
-st.set_page_config(page_title="Expense Tracker v2", layout="centered")
-st.title("💰 บันทึกรายจ่ายออนไลน์")
- 
-# สร้างการเชื่อมต่อ (มันจะไปดึงค่าจาก Secrets ที่เราตั้งไว้)
-conn = st.connection("gsheets", type=GSheetsConnection)
- 
-# อ่านข้อมูลล่าสุด
-df = conn.read(ttl=0) # ttl=0 คือให้ดึงใหม่ทุกครั้ง ไม่ใช้แคช
- 
-with st.expander("➕ เพิ่มรายการใหม่"):
+
+# --- ส่วนจัดการฐานข้อมูล (SQLite) ---
+DB_NAME = 'my_finance.db'
+
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS finance 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                  date TEXT, description TEXT, type TEXT, amount REAL)''')
+    conn.commit()
+    conn.close()
+
+def add_data(date, desc, t_type, amount):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("INSERT INTO finance (date, description, type, amount) VALUES (?,?,?,?)",
+              (date, desc, t_type, amount))
+    conn.commit()
+    conn.close()
+
+def load_data():
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT * FROM finance", conn)
+    conn.close()
+    return df
+
+# --- ส่วนหน้าตาแอป (UI) ---
+st.set_page_config(page_title="Easy Expense Tracker", layout="centered")
+st.title("💰 บันทึกรายรับ-รายจ่าย (Easy)")
+
+init_db() # สร้างฐานข้อมูลตอนเริ่ม
+
+# ส่วนกรอกข้อมูล
+with st.form("my_form", clear_on_submit=True):
     date = st.date_input("วันที่", datetime.now())
     desc = st.text_input("รายการ")
     t_type = st.selectbox("ประเภท", ["รายรับ", "รายจ่าย"])
     amount = st.number_input("จำนวนเงิน (บาท)", min_value=0.0)
-    
-    if st.button("บันทึกข้อมูล"):
-        if desc and amount > 0:
-            # สร้าง Dataframe ใหม่จากข้อมูลที่กรอก
-            new_data = pd.DataFrame([{
-                "Date": date.strftime("%d/%m/%Y"),
-                "Description": desc,
-                "Type": t_type,
-                "Amount": amount
-            }])
-            
-            # รวมข้อมูลเดิมเข้ากับข้อมูลใหม่
-            updated_df = pd.concat([df, new_data], ignore_index=True)
-            
-            # สั่ง Update กลับไปที่ Sheets
-            conn.update(data=updated_df)
-            st.success("บันทึกสำเร็จ!")
+    submit = st.form_submit_button("บันทึก")
+
+    if submit:
+        if desc:
+            add_data(date.strftime("%d/%m/%Y"), desc, t_type, amount)
+            st.success("บันทึกข้อมูลแล้ว!")
             st.rerun()
         else:
-            st.warning("กรุณากรอกข้อมูลให้ครบถ้วน")
- 
-# แสดงผลสรุป
+            st.warning("กรุณากรอกรายการ")
+
+# ส่วนแสดงผลสรุป
+df = load_data()
+
 if not df.empty:
-    income = df[df['Type'] == "รายรับ"]['Amount'].sum()
-    expense = df[df['Type'] == "รายจ่าย"]['Amount'].sum()
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("รายรับ", f"{income:,.2f}")
-    c2.metric("รายจ่าย", f"{expense:,.2f}")
-    c3.metric("คงเหลือ", f"{income-expense:,.2f}")
-    
-    st.dataframe(df, use_container_width=True)
+    income = df[df['type'] == "รายรับ"]['amount'].sum()
+    expense = df[df['type'] == "รายจ่าย"]['amount'].sum()
+    balance = income - expense
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("รายรับ", f"{income:,.2f}")
+    col2.metric("รายจ่าย", f"{expense:,.2f}")
+    col3.metric("คงเหลือ", f"{balance:,.2f}")
+
+    st.write("### รายการล่าสุด")
+    st.dataframe(df.sort_values(by='id', ascending=False), use_container_width=True)
+else:
+    st.info("ยังไม่มีข้อมูลบันทึก")
