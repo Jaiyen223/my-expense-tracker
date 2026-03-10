@@ -2,23 +2,16 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
-
+ 
 st.set_page_config(page_title="Expense Tracker v2", layout="centered")
-st.title("💰 บันทึกรายจ่าย (Google Sheets)")
-
-# 1. เชื่อมต่อ Google Sheets
-# หมายเหตุ: นำลิงก์จากหน้า Google Sheets ของคุณมาใส่ที่นี่
-url = "https://docs.google.com/spreadsheets/d/1RdQOVOD8jNgiGEJ3aSzS-mYyiv40V3YG_GP-InxpFtM/edit?usp=drivesdk"
-
+st.title("💰 บันทึกรายจ่ายออนไลน์")
+ 
+# สร้างการเชื่อมต่อ (มันจะไปดึงค่าจาก Secrets ที่เราตั้งไว้)
 conn = st.connection("gsheets", type=GSheetsConnection)
-
-# ฟังก์ชันอ่านข้อมูล
-def load_data():
-    return conn.read(spreadsheet=url, usecols=[0, 1, 2, 3])
-
-df = load_data()
-
-# --- ส่วนของการกรอกข้อมูล ---
+ 
+# อ่านข้อมูลล่าสุด
+df = conn.read(ttl=0) # ttl=0 คือให้ดึงใหม่ทุกครั้ง ไม่ใช้แคช
+ 
 with st.expander("➕ เพิ่มรายการใหม่"):
     date = st.date_input("วันที่", datetime.now())
     desc = st.text_input("รายการ")
@@ -26,28 +19,33 @@ with st.expander("➕ เพิ่มรายการใหม่"):
     amount = st.number_input("จำนวนเงิน (บาท)", min_value=0.0)
     
     if st.button("บันทึกข้อมูล"):
-        if desc:
-            # เตรียมข้อมูลใหม่
-            new_row = pd.DataFrame([[date.strftime("%d/%m/%Y"), desc, t_type, amount]], 
-                                   columns=['Date', 'Description', 'Type', 'Amount'])
-            # รวมข้อมูลเก่าและใหม่
-            updated_df = pd.concat([df, new_row], ignore_index=True)
-            # อัปเดตกลับไปยัง Google Sheets
-            conn.update(spreadsheet=url, data=updated_df)
-            st.success("บันทึกลง Google Sheets เรียบร้อย!")
+        if desc and amount > 0:
+            # สร้าง Dataframe ใหม่จากข้อมูลที่กรอก
+            new_data = pd.DataFrame([{
+                "Date": date.strftime("%d/%m/%Y"),
+                "Description": desc,
+                "Type": t_type,
+                "Amount": amount
+            }])
+            
+            # รวมข้อมูลเดิมเข้ากับข้อมูลใหม่
+            updated_df = pd.concat([df, new_data], ignore_index=True)
+            
+            # สั่ง Update กลับไปที่ Sheets
+            conn.update(data=updated_df)
+            st.success("บันทึกสำเร็จ!")
             st.rerun()
-
-# --- ส่วนของการแสดงผล ---
+        else:
+            st.warning("กรุณากรอกข้อมูลให้ครบถ้วน")
+ 
+# แสดงผลสรุป
 if not df.empty:
-    # สรุปยอด
     income = df[df['Type'] == "รายรับ"]['Amount'].sum()
     expense = df[df['Type'] == "รายจ่าย"]['Amount'].sum()
     
-    col1, col2 = st.columns(2)
-    col1.metric("รายรับรวม", f"{income:,.2f}")
-    col2.metric("รายจ่ายรวม", f"{expense:,.2f}")
-
-    st.write("### รายการทั้งหมด")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("รายรับ", f"{income:,.2f}")
+    c2.metric("รายจ่าย", f"{expense:,.2f}")
+    c3.metric("คงเหลือ", f"{income-expense:,.2f}")
+    
     st.dataframe(df, use_container_width=True)
-else:
-    st.info("ยังไม่มีข้อมูล")
