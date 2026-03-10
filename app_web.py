@@ -4,8 +4,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 
-# --- จัดการฐานข้อมูล ---
-DB_NAME = 'finance_v3.db'
+# --- 1. จัดการฐานข้อมูล (SQLite) ---
+DB_NAME = 'finance_full_v1.db'
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -45,72 +45,84 @@ def load_all_data():
     conn.close()
     return df
 
-# --- UI ---
-st.set_page_config(page_title="Finance Manager", layout="wide")
+# --- 2. ส่วนหน้าจอแอป (UI) ---
+st.set_page_config(page_title="My Finance Dashboard", layout="wide")
 init_db()
 all_df = load_all_data()
 
-st.title("💰 จัดการรายรับ-รายจ่าย (แก้ไขข้อมูลได้)")
+st.title("💰 บันทึกรายรับ-รายจ่าย & Dashboard")
 
-# --- ส่วนที่ 1: เพิ่มข้อมูลใหม่ (เลือกวันที่แบบปฏิทิน) ---
-with st.expander("➕ เพิ่มรายการใหม่"):
-    with st.form("add_form", clear_on_submit=True):
-        c1, c2, c3, c4 = st.columns(4)
-        new_date = c1.date_input("วันที่", datetime.now()) # เลือกจากปฏิทิน
-        new_desc = c2.text_input("รายการ")
-        new_type = c3.selectbox("ประเภท", ["รายรับ", "รายจ่าย"])
-        new_amount = c4.number_input("จำนวนเงิน", min_value=0.0)
-        if st.form_submit_button("บันทึก"):
-            if new_desc:
-                add_data(new_date, new_desc, new_type, new_amount)
-                st.rerun()
+# --- ส่วนที่ 1: กราฟเปรียบเทียบรายเดือน (รูปแบบเดิม) ---
+if not all_df.empty:
+    st.subheader("📈 กราฟเปรียบเทียบรายรับ-รายจ่ายแต่ละเดือน")
+    # รวมข้อมูลเพื่อวาดกราฟ
+    summary_df = all_df.groupby(['month_year', 'type'])['amount'].sum().reset_index()
+    fig = go.Figure()
+    for t in ["รายรับ", "รายจ่าย"]:
+        data = summary_df[summary_df['type'] == t]
+        fig.add_trace(go.Bar(
+            x=data['month_year'], y=data['amount'], name=t,
+            marker_color='#2ecc71' if t == "รายรับ" else '#e74c3c'
+        ))
+    fig.update_layout(barmode='group', height=300, margin=dict(l=20, r=20, t=20, b=20))
+    st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
-# --- ส่วนที่ 2: ตารางข้อมูลและการแก้ไข ---
-if not all_df.empty:
-    # เลือกเดือนที่จะดู
-    months = sorted(all_df['month_year'].unique(), reverse=True)
-    sel_month = st.sidebar.selectbox("📅 เลือกเดือนที่ต้องการ", months)
-    
-    st.subheader(f"รายการประจำเดือน {sel_month}")
-    view_df = all_df[all_df['month_year'] == sel_month]
+# --- ส่วนที่ 2: เพิ่มข้อมูลใหม่ & สรุปยอดเดือนที่เลือก ---
+col_add, col_stat = st.columns([1, 1])
 
-    for index, row in view_df.iterrows():
-        with st.container():
-            col_d, col_desc, col_t, col_a, col_edit, col_del = st.columns([1.5, 3, 1.5, 1.5, 1, 1])
-            
-            col_d.write(row['date'])
-            col_desc.write(row['description'])
-            col_t.write(row['type'])
-            col_a.write(f"{row['amount']:,.2f}")
-            
-            # ปุ่มแก้ไข
-            if col_edit.button("📝 แก้ไข", key=f"edit_{row['id']}"):
-                st.session_state[f"editing_{row['id']}"] = True
-
-            # ปุ่มลบ
-            if col_del.button("🗑️ ลบ", key=f"del_{row['id']}"):
-                delete_data(row['id'])
+with col_add:
+    st.subheader("➕ เพิ่มรายการใหม่")
+    with st.form("add_form", clear_on_submit=True):
+        f_date = st.date_input("วันที่", datetime.now()) # เลือกแบบปฏิทิน
+        f_desc = st.text_input("รายการ")
+        f_type = st.selectbox("ประเภท", ["รายรับ", "รายจ่าย"])
+        f_amt = st.number_input("จำนวนเงิน", min_value=0.0, step=10.0)
+        if st.form_submit_button("บันทึกข้อมูล"):
+            if f_desc:
+                add_data(f_date, f_desc, f_type, f_amt)
                 st.rerun()
 
-            # ฟอร์มแก้ไข (จะปรากฏขึ้นเมื่อกดปุ่มแก้ไข)
-            if st.session_state.get(f"editing_{row['id']}", False):
-                with st.form(key=f"form_{row['id']}"):
-                    st.write("--- แก้ไขข้อมูล ---")
-                    u_date = st.date_input("วันที่", datetime.strptime(row['date'], "%Y-%m-%d"))
-                    u_desc = st.text_input("รายการ", value=row['description'])
-                    u_type = st.selectbox("ประเภท", ["รายรับ", "รายจ่าย"], index=0 if row['type']=="รายรับ" else 1)
-                    u_amount = st.number_input("จำนวนเงิน", value=row['amount'])
-                    
-                    c_save, c_cancel = st.columns(2)
-                    if c_save.form_submit_button("บันทึกการแก้ไข"):
-                        update_data(row['id'], u_date, u_desc, u_type, u_amount)
-                        st.session_state[f"editing_{row['id']}"] = False
-                        st.rerun()
-                    if c_cancel.form_submit_button("ยกเลิก"):
-                        st.session_state[f"editing_{row['id']}"] = False
-                        st.rerun()
-        st.write("---")
-else:
-    st.info("ยังไม่มีข้อมูล กรุณาเพิ่มรายการใหม่")
+with col_stat:
+    st.subheader("📊 สรุปยอดรายเดือน")
+    if not all_df.empty:
+        months_list = sorted(all_df['month_year'].unique(), reverse=True)
+        sel_month = st.selectbox("เลือกเดือนที่จะดู", months_list)
+        
+        # กรองข้อมูลเดือนที่เลือก
+        m_df = all_df[all_df['month_year'] == sel_month]
+        inc = m_df[m_df['type'] == "รายรับ"]['amount'].sum()
+        exp = m_df[m_df['type'] == "รายจ่าย"]['amount'].sum()
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("รายรับ", f"{inc:,.2f}")
+        c2.metric("รายจ่าย", f"-{exp:,.2f}")
+        c3.metric("คงเหลือ", f"{inc-exp:,.2f}")
+    else:
+        st.info("ยังไม่มีข้อมูล")
+
+st.divider()
+
+# --- ส่วนที่ 3: ตารางจัดการข้อมูล (แก้ไข/ลบ) ---
+if not all_df.empty:
+    st.subheader(f"📑 รายการทั้งหมดของเดือน {sel_month}")
+    # แสดงตารางพร้อมปุ่มแก้ไขในตัว
+    for index, row in m_df.iterrows():
+        with st.expander(f"📅 {row['date']} | {row['description']} | {row['amount']:,.2f} ({row['type']})"):
+            u_col1, u_col2 = st.columns(2)
+            
+            # ฟอร์มแก้ไขใน Expander
+            with st.form(key=f"edit_form_{row['id']}"):
+                edit_date = st.date_input("แก้ไขวันที่", datetime.strptime(row['date'], "%Y-%m-%d"))
+                edit_desc = st.text_input("แก้ไขรายการ", value=row['description'])
+                edit_type = st.selectbox("แก้ไขประเภท", ["รายรับ", "รายจ่าย"], index=0 if row['type']=="รายรับ" else 1)
+                edit_amt = st.number_input("แก้ไขจำนวนเงิน", value=row['amount'])
+                
+                btn_save, btn_del = st.columns(2)
+                if btn_save.form_submit_button("💾 บันทึกการแก้ไข"):
+                    update_data(row['id'], edit_date, edit_desc, edit_type, edit_amt)
+                    st.rerun()
+                if btn_del.form_submit_button("🗑️ ลบรายการนี้"):
+                    delete_data(row['id'])
+                    st.rerun()
